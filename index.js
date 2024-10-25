@@ -2,6 +2,7 @@ const express = require("express");
 const app = express();
 require("dotenv").config();
 const cors = require("cors");
+const nodemailer = require("nodemailer");
 const cookieParser = require("cookie-parser");
 const { MongoClient, ServerApiVersion, ObjectId } = require("mongodb");
 const jwt = require("jsonwebtoken");
@@ -19,6 +20,44 @@ app.use(cors(corsOptions));
 
 app.use(express.json());
 app.use(cookieParser());
+
+// send email
+const sendEmail = (emailAddress, emailData) => {
+  const transporter = nodemailer.createTransport({
+    service: "gmail",
+    host: "smtp.gmail.com",
+    port: 587,
+    secure: false, // true for port 465, false for other ports
+    auth: {
+      user: process.env.TRANSPORTER_EMAIL,
+      pass: process.env.TRANSPORTER_PASS,
+    },
+  });
+
+  // verify connection configuration
+  transporter.verify(function (error, success) {
+    if (error) {
+      console.log(error);
+    } else {
+      console.log("Server is ready to take our messages");
+    }
+  });
+
+  // send mail with defined transport object
+  const mailBody = {
+    from: `"Rent Vista" <${process.env.TRANSPORTER_EMAIL}>`, // sender address
+    to: emailAddress, // list of receivers
+    subject: emailData.subject, // Subject line
+    html: emailData.message, // html body
+  };
+  transporter.sendMail(mailBody, (error, info) => {
+    if (error) {
+      console.log(error);
+    } else {
+      console.log("Email Sent :" + info.response);
+    }
+  });
+};
 
 // Verify Token Middleware
 const verifyToken = async (req, res, next) => {
@@ -177,6 +216,11 @@ async function run() {
         },
       };
       const result = await usersCollection.updateOne(query, updateDoc, options);
+      // welcome new user and email
+      sendEmail(user?.email, {
+        subject: "Welcome to RentVista!",
+        message: `Hope you will find your destination`,
+      });
       res.send(result);
     });
 
@@ -231,6 +275,30 @@ async function run() {
       // save room bookings info
       const result = await bookingsCollection.insertOne(bookingInfo);
 
+      // send email to guest
+      sendEmail(bookingInfo?.guest?.email, {
+        subject: "Booking Successful",
+        message: `You've successfully booked a room through RentVista. Transaction Id :${bookingInfo.transactionID}`,
+      });
+      // send email to host
+      sendEmail(bookingInfo?.host?.email, {
+        subject: "Your Room Got Booked",
+        message: `Get ready to welcome ${bookingInfo?.guest.name}.`,
+      });
+
+      res.send(result);
+    });
+
+    app.put("/room/update/:id", async (req, res) => {
+      const id = req.params.id;
+      const roomData = req.body;
+      const query = { _id: new ObjectId(id) };
+      const updateDoc = {
+        $set: {
+          ...roomData,
+        },
+      };
+      const result = await roomsCollection.updateOne(query, updateDoc);
       res.send(result);
     });
 
@@ -272,6 +340,146 @@ async function run() {
       const query = { _id: new ObjectId(id) };
       const result = await bookingsCollection.deleteOne(query);
       res.send(result);
+    });
+
+    // admin stat
+    app.get("/admin-stat", verifyToken, verifyAdmin, async (req, res) => {
+      const bookingDetails = await bookingsCollection
+        .find(
+          {},
+          {
+            projection: {
+              price: 1,
+              date: 1,
+            },
+          }
+        )
+        .toArray();
+      const totalUser = await usersCollection.countDocuments();
+      const totalRoom = await roomsCollection.countDocuments();
+      const totalPrice = bookingDetails.reduce(
+        (sum, booking) => sum + booking.price,
+        0
+      );
+      const chartData = bookingDetails.map((booking) => {
+        const date = new Date(booking.date).getDate();
+        const month = new Date(booking.date).getMonth() + 1;
+        const data = [`${date}/${month}`, booking?.price];
+        return data;
+      });
+      // unShift and splice work are same but unShift are stander
+      chartData.unshift(["Day", "Sales"]);
+      // chartData.splice(0, 0, ["Day", "Sales"]);
+      // console.log(chartData);
+      // console.log(bookingDetails);
+      res.send({
+        totalPrice,
+        totalUser,
+        totalRoom,
+        totalBooking: bookingDetails.length,
+        chartData,
+      });
+    });
+
+    // host stat
+    app.get("/host-stat", verifyToken, verifyHost, async (req, res) => {
+      const { email } = req.user;
+
+      const bookingDetails = await bookingsCollection
+        .find(
+          { "host.email": email },
+          {
+            projection: {
+              price: 1,
+              date: 1,
+            },
+          }
+        )
+        .toArray();
+      const totalRoom = await roomsCollection.countDocuments({
+        "host.email": email,
+      });
+      const totalPrice = bookingDetails.reduce(
+        (sum, booking) => sum + booking.price,
+        0
+      );
+
+      const { timestamp } = await usersCollection.findOne(
+        { email },
+        {
+          projection: {
+            timestamp: 1,
+          },
+        }
+      );
+
+      const chartData = bookingDetails.map((booking) => {
+        const date = new Date(booking.date).getDate();
+        const month = new Date(booking.date).getMonth() + 1;
+        const data = [`${date}/${month}`, booking?.price];
+        return data;
+      });
+      // unShift and splice work are same but unShift are stander
+      chartData.unshift(["Day", "Sales"]);
+      // chartData.splice(0, 0, ["Day", "Sales"]);
+      // console.log(chartData);
+      // console.log(bookingDetails);
+      res.send({
+        totalPrice,
+        totalRoom,
+        totalBooking: bookingDetails.length,
+        chartData,
+        hostSince: timestamp,
+      });
+    });
+
+    // guest stat
+    app.get("/guest-stat", verifyToken, async (req, res) => {
+      const { email } = req.user;
+
+      const bookingDetails = await bookingsCollection
+        .find(
+          { "guest.email": email },
+          {
+            projection: {
+              price: 1,
+              date: 1,
+            },
+          }
+        )
+        .toArray();
+
+      const totalPrice = bookingDetails.reduce(
+        (sum, booking) => sum + booking.price,
+        0
+      );
+
+      const { timestamp } = await usersCollection.findOne(
+        { email },
+        {
+          projection: {
+            timestamp: 1,
+          },
+        }
+      );
+
+      const chartData = bookingDetails.map((booking) => {
+        const date = new Date(booking.date).getDate();
+        const month = new Date(booking.date).getMonth() + 1;
+        const data = [`${date}/${month}`, booking?.price];
+        return data;
+      });
+      // unShift and splice work are same but unShift are stander
+      chartData.unshift(["Day", "Sales"]);
+      // chartData.splice(0, 0, ["Day", "Sales"]);
+      // console.log(chartData);
+      // console.log(bookingDetails);
+      res.send({
+        totalPrice,
+        totalBooking: bookingDetails.length,
+        chartData,
+        guestSince: timestamp,
+      });
     });
 
     // Send a ping to confirm a successful connection
