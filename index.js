@@ -12,7 +12,12 @@ const port = process.env.PORT || 8000;
 
 // middleware
 const corsOptions = {
-  origin: ["http://localhost:5173", "http://localhost:5174"],
+  origin: [
+    "http://localhost:5173",
+    "http://localhost:5174",
+    "https://stay-vista-15d4b.web.app",
+    "https://stay-vista-15d4b.firebaseapp.com",
+  ],
   credentials: true,
   optionSuccessStatus: 200,
 };
@@ -233,6 +238,8 @@ async function run() {
         query = { category: category };
       }
       const result = await roomsCollection.find(query).toArray();
+      console.log(result);
+
       res.send(result);
     });
 
@@ -278,7 +285,7 @@ async function run() {
       // send email to guest
       sendEmail(bookingInfo?.guest?.email, {
         subject: "Booking Successful",
-        message: `You've successfully booked a room through RentVista. Transaction Id :${bookingInfo.transactionID}`,
+        message: `You've successfully booked a room through RentVista. Transaction Id :${bookingInfo.transactionId}`,
       });
       // send email to host
       sendEmail(bookingInfo?.host?.email, {
@@ -483,7 +490,7 @@ async function run() {
     });
 
     // Send a ping to confirm a successful connection
-    await client.db("admin").command({ ping: 1 });
+    // await client.db("admin").command({ ping: 1 });
     console.log(
       "Pinged your deployment. You successfully connected to MongoDB!"
     );
